@@ -5,6 +5,7 @@ actor ParakeetEngine: TranscriptionEngine {
     private var asrManager: AsrManager?
     private let appState: AppState
     private var isInitialized = false
+    private var isInitializing = false
     private var currentModelType: ParakeetModelType?
 
     init(appState: AppState) {
@@ -12,11 +13,17 @@ actor ParakeetEngine: TranscriptionEngine {
     }
 
     func initialize() async throws {
+        guard !isInitializing else {
+            AppLogger.transcription.debug("Parakeet initialization already in progress, skipping")
+            return
+        }
+        isInitializing = true
+        defer { isInitializing = false }
+
         let modelType = await appState.parakeetModel
         let modelChanged = currentModelType != modelType
 
         if isInitialized && !modelChanged {
-            AppLogger.transcription.debug("Parakeet already initialized with same model")
             return
         }
 
@@ -25,18 +32,15 @@ actor ParakeetEngine: TranscriptionEngine {
         currentModelType = modelType
 
         let modelVersion: AsrModelVersion = modelType == .v2English ? .v2 : .v3
-        let versionString = modelVersion == .v2 ? "v2" : "v3"
-        AppLogger.transcription.info("Initializing Parakeet engine with model: \(modelType.displayName) (version: \(versionString))")
+        AppLogger.transcription.info("Initializing Parakeet with model: \(modelType.rawValue)")
 
         await MainActor.run {
             appState.isDownloadingModel = true
-            appState.isModelDownloaded = false
+            appState.currentlyDownloadingModel = modelType.rawValue
         }
 
         do {
-            AppLogger.transcription.debug("Downloading/loading Parakeet models...")
             let models = try await AsrModels.downloadAndLoad(version: modelVersion)
-            AppLogger.transcription.debug("Loading ASR manager...")
             let manager = AsrManager(config: .default)
             try await manager.loadModels(models)
             asrManager = manager
@@ -44,22 +48,22 @@ actor ParakeetEngine: TranscriptionEngine {
 
             await MainActor.run {
                 appState.isDownloadingModel = false
-                appState.isModelDownloaded = true
-                appState.downloadedModels.insert(modelType.rawValue)
+                appState.currentlyDownloadingModel = nil
+                appState.parakeetDownloadedModels.insert(modelType.rawValue)
             }
 
-            AppLogger.transcription.info("Parakeet engine initialized successfully")
+            AppLogger.transcription.info("Parakeet initialized successfully")
         } catch {
             isInitialized = false
             asrManager = nil
 
             await MainActor.run {
                 appState.isDownloadingModel = false
-                appState.isModelDownloaded = false
+                appState.currentlyDownloadingModel = nil
                 appState.lastError = "Failed to initialize Parakeet: \(error.localizedDescription)"
             }
 
-            AppLogger.transcription.error("Failed to initialize Parakeet engine: \(error.localizedDescription)")
+            AppLogger.transcription.error("Failed to initialize Parakeet: \(error.localizedDescription)")
             throw ParakeetError.initializationFailed(error.localizedDescription)
         }
     }
@@ -92,6 +96,31 @@ actor ParakeetEngine: TranscriptionEngine {
         let code = await appState.language
         guard code != "auto" else { return nil }
         return Language(rawValue: code)
+    }
+}
+
+extension ParakeetEngine {
+    /// Downloads model weights without changing the user's active engine/model selection.
+    /// Reports progress and errors via AppState.
+    @MainActor
+    static func download(modelType: ParakeetModelType, appState: AppState) async {
+        let version: AsrModelVersion = modelType == .v2English ? .v2 : .v3
+
+        appState.isDownloadingModel = true
+        appState.currentlyDownloadingModel = modelType.rawValue
+        defer {
+            appState.isDownloadingModel = false
+            appState.currentlyDownloadingModel = nil
+        }
+
+        do {
+            _ = try await AsrModels.download(version: version)
+            appState.parakeetDownloadedModels.insert(modelType.rawValue)
+            AppLogger.transcription.info("Downloaded Parakeet model: \(modelType.rawValue)")
+        } catch {
+            appState.lastError = "Failed to download \(modelType.displayName): \(error.localizedDescription)"
+            AppLogger.transcription.error("Failed to download Parakeet model \(modelType.rawValue): \(error.localizedDescription)")
+        }
     }
 }
 

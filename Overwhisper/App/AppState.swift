@@ -3,28 +3,6 @@ import Combine
 import SwiftUI
 import Carbon.HIToolbox
 
-struct DebugLogEntry: Identifiable {
-    let id = UUID()
-    let timestamp: Date
-    let level: DebugLogLevel
-    let message: String
-    let source: String
-
-    enum DebugLogLevel: String {
-        case info = "INFO"
-        case warning = "WARN"
-        case error = "ERROR"
-
-        var color: String {
-            switch self {
-            case .info: return "blue"
-            case .warning: return "orange"
-            case .error: return "red"
-            }
-        }
-    }
-}
-
 struct TranscriptionHistoryEntry: Identifiable, Codable, Equatable {
     let id: UUID
     let timestamp: Date
@@ -91,16 +69,33 @@ enum ParakeetModelType: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .v2English: return "Parakeet v2 (English)"
-        case .v3Multilingual: return "Parakeet v3 (Multilingual)"
+        case .v2English: return "Parakeet v2 — English"
+        case .v3Multilingual: return "Parakeet v3 — Multilingual"
         }
     }
 
-    var description: String {
+    var size: String {
         switch self {
-        case .v2English: return "English only, high accuracy"
-        case .v3Multilingual: return "25 European languages"
+        case .v2English: return "~600 MB"
+        case .v3Multilingual: return "~700 MB"
         }
+    }
+
+    var cacheDirectoryName: String {
+        switch self {
+        case .v2English: return "parakeet-tdt-0.6b-v2"
+        case .v3Multilingual: return "parakeet-tdt-0.6b-v3"
+        }
+    }
+
+    var cacheURL: URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return appSupport
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent(cacheDirectoryName, isDirectory: true)
     }
 }
 
@@ -358,6 +353,11 @@ class AppState: ObservableObject {
     @Published var isDownloadingModel: Bool = false
     @Published var isInitializingEngine: Bool = false
     @Published var downloadedModels: Set<String> = []
+    @Published var parakeetDownloadedModels: Set<String> {
+        didSet {
+            UserDefaults.standard.set(Array(parakeetDownloadedModels), forKey: "parakeetDownloadedModels")
+        }
+    }
     @Published var currentlyDownloadingModel: String?
 
     // Last transcription result
@@ -367,13 +367,7 @@ class AppState: ObservableObject {
         didSet { persistTranscriptionHistory() }
     }
 
-    // Debug mode
-    @Published var debugModeEnabled: Bool {
-        didSet { UserDefaults.standard.set(debugModeEnabled, forKey: "debugModeEnabled") }
-    }
-    @Published var debugLogs: [DebugLogEntry] = []
     let debugSessionStore = DebugSessionStore()
-    private let maxDebugLogs = 100
 
     // Hotkey recording state - tracks which recorder is active (nil if none)
     @Published var activeHotkeyRecorder: String?
@@ -398,6 +392,9 @@ class AppState: ObservableObject {
 
         let parakeetModelStr = UserDefaults.standard.string(forKey: "parakeetModel") ?? ParakeetModelType.v3Multilingual.rawValue
         self.parakeetModel = ParakeetModelType(rawValue: parakeetModelStr) ?? .v3Multilingual
+
+        let storedParakeetDownloads = UserDefaults.standard.stringArray(forKey: "parakeetDownloadedModels") ?? []
+        self.parakeetDownloadedModels = Set(storedParakeetDownloads)
 
         self.language = UserDefaults.standard.string(forKey: "language") ?? "auto"
         self.translateToEnglish = UserDefaults.standard.bool(forKey: "translateToEnglish")
@@ -444,7 +441,7 @@ class AppState: ObservableObject {
             self.pushToTalkHotkeyConfig = .defaultPushToTalk
         }
 
-        self.debugModeEnabled = UserDefaults.standard.bool(forKey: "debugModeEnabled")
+        UserDefaults.standard.removeObject(forKey: "debugModeEnabled")
 
         if let historyData = UserDefaults.standard.data(forKey: transcriptionHistoryKey),
            let history = try? JSONDecoder().decode([TranscriptionHistoryEntry].self, from: historyData) {
@@ -453,19 +450,6 @@ class AppState: ObservableObject {
         } else {
             self.transcriptionHistory = []
         }
-    }
-
-    func addDebugLog(_ message: String, level: DebugLogEntry.DebugLogLevel = .info, source: String = "App") {
-        guard debugModeEnabled else { return }
-        let entry = DebugLogEntry(timestamp: Date(), level: level, message: message, source: source)
-        debugLogs.insert(entry, at: 0)
-        if debugLogs.count > maxDebugLogs {
-            debugLogs.removeLast()
-        }
-    }
-
-    func clearDebugLogs() {
-        debugLogs.removeAll()
     }
 
     func startRecordingTimer() {
@@ -542,7 +526,6 @@ class AppState: ObservableObject {
         startAtLogin = false
         toggleHotkeyConfig = .defaultToggle
         pushToTalkHotkeyConfig = .defaultPushToTalk
-        debugModeEnabled = false
     }
 
     private func persistTranscriptionHistory() {
