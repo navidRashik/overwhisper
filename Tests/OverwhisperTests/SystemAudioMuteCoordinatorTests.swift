@@ -30,7 +30,15 @@ private final class FakeSystemAudioControl: SystemAudioControlling {
         set { if let signature, let newValue { profiles[signature] = newValue } }
     }
 
+    /// When set, the next volume query re-enters the observer first, the way a
+    /// CoreAudio event lands while NSAppleScript spins the run loop.
+    var reenterOnNextVolumeQuery = false
+
     func outputVolume() -> Int? {
+        if reenterOnNextVolumeQuery {
+            reenterOnNextVolumeQuery = false
+            handler?(.output)
+        }
         guard let current, current.supportsVolume else { return nil }
         return current.volume
     }
@@ -321,6 +329,32 @@ final class SystemAudioMuteCoordinatorTests: XCTestCase {
         control.signature = Fake.stereo
         control.handler?(.mute)
         XCTAssertFalse(control[Fake.stereo].muted)
+    }
+
+    // MARK: Re-entrancy
+
+    func testEventDeliveredDuringMuteDoesNotDuplicateSnapshots() {
+        let control = Fake(current: Fake.stereo, profiles: [
+            Fake.stereo: .init(muted: false, volume: 60),
+            Fake.headset: .init(muted: false, volume: 10),
+        ])
+        let coordinator = makeCoordinator(control)
+
+        coordinator.mute()
+        // The profile flips, and the CoreAudio event for it arrives while the
+        // post-engine re-check is inside its first AppleScript call.
+        control.signature = Fake.headset
+        control.reenterOnNextVolumeQuery = true
+        coordinator.outputMayHaveChanged()
+        XCTAssertTrue(control[Fake.headset].muted)
+        XCTAssertEqual(coordinator.snapshots.count, 2)
+
+        coordinator.restore()
+        control.switchTo(Fake.stereo)
+        fireTimers()
+        XCTAssertEqual(coordinator.phase, .idle)
+        XCTAssertFalse(control[Fake.stereo].muted)
+        XCTAssertFalse(control[Fake.headset].muted)
     }
 
     // MARK: Volume fallback
