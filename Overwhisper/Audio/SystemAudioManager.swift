@@ -17,6 +17,15 @@ struct SystemAudioOutputSignature: Hashable {
 
 // MARK: - Control surface (mockable)
 
+/// What the system-audio observer noticed.
+enum SystemAudioChange {
+    /// Default output device, device list, or the output device's stream
+    /// format changed. A Bluetooth profile switch shows up here.
+    case output
+    /// The output device's mute bit changed.
+    case mute
+}
+
 /// The system-audio operations the mute coordinator needs. The real
 /// implementation talks to AppleScript and CoreAudio; tests substitute a fake.
 protocol SystemAudioControlling: AnyObject {
@@ -26,9 +35,9 @@ protocol SystemAudioControlling: AnyObject {
     @discardableResult func setOutputVolume(_ volume: Int) -> Bool
     func currentOutputSignature() -> SystemAudioOutputSignature?
 
-    /// Start reporting output-device changes (default device, device list,
-    /// stream format) to `handler` on the main thread.
-    func startObservingOutputChanges(_ handler: @escaping () -> Void)
+    /// Start reporting output-device and mute changes to `handler` on the
+    /// main thread.
+    func startObservingOutputChanges(_ handler: @escaping (SystemAudioChange) -> Void)
     func stopObservingOutputChanges()
 }
 
@@ -79,6 +88,11 @@ final class SystemAudioMuteCoordinator {
     private(set) var snapshots: [Snapshot] = []
     private var generation = 0
 
+    /// The profile we last sent a mute/unmute to, and the state we left it in,
+    /// so a later mute-bit change can be told apart from our own command.
+    private var lastActedSignature: SystemAudioOutputSignature?
+    private var expectedMuted: Bool?
+
     init(
         control: SystemAudioControlling,
         scheduleAfter: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, work in
@@ -106,8 +120,8 @@ final class SystemAudioMuteCoordinator {
 
         applyMute()
 
-        control.startObservingOutputChanges { [weak self] in
-            self?.outputMayHaveChanged()
+        control.startObservingOutputChanges { [weak self] change in
+            self?.handle(change)
         }
         for delay in Self.followUpCheckDelays {
             scheduleAfter(delay) { [weak self] in
@@ -151,6 +165,31 @@ final class SystemAudioMuteCoordinator {
         }
     }
 
+    private func handle(_ change: SystemAudioChange) {
+        switch change {
+        case .output:
+            outputMayHaveChanged()
+        case .mute:
+            muteBitChanged()
+        }
+    }
+
+    /// While we wait for a muted profile to come back, the user may mute the
+    /// headset themselves. Honor that instead of undoing it when the profile
+    /// returns. A mute-bit change that coincides with a profile switch is the
+    /// switch itself and is handled as an output change.
+    private func muteBitChanged() {
+        guard phase == .restoring else { return }
+        let signature = control.currentOutputSignature()
+        guard signature == lastActedSignature else {
+            outputMayHaveChanged()
+            return
+        }
+        guard let expected = expectedMuted, let muted = control.isOutputMuted(), muted != expected else { return }
+        AppLogger.system.info("Mute changed by the user after restore; leaving remaining output profiles alone")
+        finish()
+    }
+
     // MARK: Muting
 
     private func applyMute() {
@@ -162,8 +201,19 @@ final class SystemAudioMuteCoordinator {
         let signature = control.currentOutputSignature()
 
         if let muted = control.isOutputMuted(), muted {
-            snapshots.append(Snapshot(signature: signature, wasMuted: true, previousVolume: currentVolume, usedVolumeFallback: false, restored: false))
-            AppLogger.system.info("System already muted")
+            // On some headsets our mute carries over to the profile the mic
+            // switches to; on others each profile has its own bit. If we
+            // muted an earlier profile ourselves, treat this one as ours too,
+            // so restore unmutes it rather than leaving it "as found".
+            let carriedOver = snapshots.contains { !$0.wasMuted }
+            snapshots.append(Snapshot(signature: signature, wasMuted: !carriedOver, previousVolume: currentVolume, usedVolumeFallback: false, restored: false))
+            if carriedOver {
+                AppLogger.system.info("\(Self.describe(signature)) already muted; assuming our mute carried over")
+                lastActedSignature = signature
+                expectedMuted = true
+            } else {
+                AppLogger.system.info("System already muted")
+            }
             return
         }
 
@@ -173,6 +223,8 @@ final class SystemAudioMuteCoordinator {
         // Verify it actually worked - some devices silently ignore the mute command
         if let muted = control.isOutputMuted(), muted {
             snapshots.append(Snapshot(signature: signature, wasMuted: false, previousVolume: currentVolume, usedVolumeFallback: false, restored: false))
+            lastActedSignature = signature
+            expectedMuted = true
             AppLogger.system.info("Muted using mute command (\(Self.describe(signature)))")
             return
         }
@@ -200,6 +252,8 @@ final class SystemAudioMuteCoordinator {
         guard !snapshot.wasMuted, !snapshot.usedVolumeFallback else { return }
         if let muted = control.isOutputMuted(), !muted {
             control.setOutputMuted(true)
+            lastActedSignature = signature
+            expectedMuted = true
             AppLogger.system.info("Re-muted \(Self.describe(signature)) after output change")
         }
     }
@@ -210,13 +264,15 @@ final class SystemAudioMuteCoordinator {
         let signature = control.currentOutputSignature()
 
         if let index = snapshots.lastIndex(where: { !$0.restored && $0.matches(signature) }) {
-            restoreSnapshot(at: index)
+            restoreSnapshot(at: index, current: signature)
         } else if let snapshot = snapshots.last(where: { $0.matches(signature) }),
                   !snapshot.wasMuted, !snapshot.usedVolumeFallback,
                   let muted = control.isOutputMuted(), muted {
             // Already restored this profile once, yet it came back muted: the
             // transport changed underneath an unchanged signature. Unmute again.
             control.setOutputMuted(false)
+            lastActedSignature = signature
+            expectedMuted = false
             AppLogger.system.info("Unmuted \(Self.describe(signature)) again after output change")
         }
 
@@ -225,7 +281,7 @@ final class SystemAudioMuteCoordinator {
         }
     }
 
-    private func restoreSnapshot(at index: Int) {
+    private func restoreSnapshot(at index: Int, current signature: SystemAudioOutputSignature?) {
         var snapshot = snapshots[index]
         defer {
             snapshot.restored = true
@@ -245,6 +301,8 @@ final class SystemAudioMuteCoordinator {
         }
 
         if control.setOutputMuted(false) {
+            lastActedSignature = signature
+            expectedMuted = false
             AppLogger.system.info("Unmuted using mute command (\(Self.describe(snapshot.signature)))")
         }
     }
@@ -266,6 +324,8 @@ final class SystemAudioMuteCoordinator {
         snapshots = []
         phase = .idle
         graceElapsed = false
+        lastActedSignature = nil
+        expectedMuted = nil
         generation += 1
     }
 
@@ -290,7 +350,7 @@ final class CoreAudioSystemAudioControl: SystemAudioControlling {
     private var systemListeners: [Listener] = []
     private var deviceListeners: [Listener] = []
     private var observedDevice: AudioDeviceID?
-    private var handler: (() -> Void)?
+    private var handler: ((SystemAudioChange) -> Void)?
 
     func outputVolume() -> Int? {
         let script = NSAppleScript(source: "output volume of (get volume settings)")
@@ -339,7 +399,7 @@ final class CoreAudioSystemAudioControl: SystemAudioControlling {
 
     // MARK: Observation
 
-    func startObservingOutputChanges(_ handler: @escaping () -> Void) {
+    func startObservingOutputChanges(_ handler: @escaping (SystemAudioChange) -> Void) {
         stopObservingOutputChanges()
         self.handler = handler
 
@@ -350,7 +410,7 @@ final class CoreAudioSystemAudioControl: SystemAudioControlling {
             if device != self.observedDevice {
                 self.observeDevice(device)
             }
-            self.handler?()
+            self.handler?(.output)
         }
         systemListeners = [
             Listener(objectID: systemObject, address: Self.address(kAudioHardwarePropertyDefaultOutputDevice), block: systemBlock),
@@ -376,13 +436,17 @@ final class CoreAudioSystemAudioControl: SystemAudioControlling {
         observedDevice = device
         guard let device else { return }
 
-        let deviceBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.handler?()
+        let outputBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handler?(.output)
+        }
+        let muteBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handler?(.mute)
         }
         deviceListeners = [
-            Listener(objectID: device, address: Self.address(kAudioDevicePropertyNominalSampleRate), block: deviceBlock),
-            Listener(objectID: device, address: Self.address(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeOutput), block: deviceBlock),
-            Listener(objectID: device, address: Self.address(kAudioDevicePropertyStreams, scope: kAudioDevicePropertyScopeOutput), block: deviceBlock),
+            Listener(objectID: device, address: Self.address(kAudioDevicePropertyNominalSampleRate), block: outputBlock),
+            Listener(objectID: device, address: Self.address(kAudioDevicePropertyStreamConfiguration, scope: kAudioDevicePropertyScopeOutput), block: outputBlock),
+            Listener(objectID: device, address: Self.address(kAudioDevicePropertyStreams, scope: kAudioDevicePropertyScopeOutput), block: outputBlock),
+            Listener(objectID: device, address: Self.address(kAudioDevicePropertyMute, scope: kAudioDevicePropertyScopeOutput), block: muteBlock),
         ]
         add(deviceListeners)
     }
