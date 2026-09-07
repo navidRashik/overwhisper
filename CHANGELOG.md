@@ -3,6 +3,10 @@
 Notes here are shown in the in-app update dialog. Each release is a `##` heading
 matching the version number, followed by a bullet list of user-facing changes.
 
+## 1.9.3
+
+- Fixed "Mute system audio while recording" with AirPods and other Bluetooth headsets. Opening the microphone switches the headset to a different audio profile with its own mute state, so music could keep playing during the recording and the headphones could stay muted afterwards. The mute now follows the profile switch in both directions.
+
 ## 1.9.2
 
 - System audio now mutes within about a third of a second of starting a recording. The mute no longer waits for the microphone to spin up, and the start chime holds it off for at most 0.3s.
