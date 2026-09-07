@@ -15,7 +15,7 @@ private final class FakeSystemAudioControl: SystemAudioControlling {
     var profiles: [SystemAudioOutputSignature: ProfileState] = [:]
     var signature: SystemAudioOutputSignature?
     var observing = false
-    var handler: (() -> Void)?
+    var handler: ((SystemAudioChange) -> Void)?
 
     static let stereo = SystemAudioOutputSignature(deviceID: 86, sampleRate: 48_000)
     static let headset = SystemAudioOutputSignature(deviceID: 86, sampleRate: 24_000)
@@ -56,7 +56,7 @@ private final class FakeSystemAudioControl: SystemAudioControlling {
 
     func currentOutputSignature() -> SystemAudioOutputSignature? { signature }
 
-    func startObservingOutputChanges(_ handler: @escaping () -> Void) {
+    func startObservingOutputChanges(_ handler: @escaping (SystemAudioChange) -> Void) {
         observing = true
         self.handler = handler
     }
@@ -69,7 +69,22 @@ private final class FakeSystemAudioControl: SystemAudioControlling {
     /// The system switches output profile and CoreAudio notifies us.
     func switchTo(_ signature: SystemAudioOutputSignature) {
         self.signature = signature
-        handler?()
+        handler?(.output)
+    }
+
+    /// Like `switchTo`, but the headset carries the current mute bit over to
+    /// the new profile (Galaxy Buds do this on the way into HFP).
+    func switchCarryingMute(to signature: SystemAudioOutputSignature) {
+        let muted = current?.muted ?? false
+        self.signature = signature
+        profiles[signature]?.muted = muted
+        handler?(.output)
+    }
+
+    /// The user toggles mute themselves; CoreAudio reports the bit change.
+    func userSetsMute(_ muted: Bool) {
+        profiles[signature!]?.muted = muted
+        handler?(.mute)
     }
 
     subscript(_ signature: SystemAudioOutputSignature) -> ProfileState { profiles[signature]! }
@@ -216,7 +231,7 @@ final class SystemAudioMuteCoordinatorTests: XCTestCase {
         // Transport flips but reports the same device/sample rate, and the new
         // transport is unmuted.
         control.profiles[Fake.stereo]!.muted = false
-        control.handler?()
+        control.handler?(.output)
         XCTAssertTrue(control[Fake.stereo].muted)
         XCTAssertEqual(coordinator.snapshots.count, 1)
 
@@ -224,7 +239,87 @@ final class SystemAudioMuteCoordinatorTests: XCTestCase {
         XCTAssertFalse(control[Fake.stereo].muted)
         // Switch back to the original transport, which we muted first.
         control.profiles[Fake.stereo]!.muted = true
-        control.handler?()
+        control.handler?(.output)
+        XCTAssertFalse(control[Fake.stereo].muted)
+    }
+
+    // MARK: Headsets that carry the mute bit into the new profile
+
+    func testMuteCarriedIntoHeadsetProfileIsStillUnmutedOnRestore() {
+        // Measured on Galaxy Buds 3 Pro: the HFP profile came up already muted
+        // after we muted A2DP, but A2DP kept its own bit and came back muted.
+        let control = Fake(current: Fake.stereo, profiles: [
+            Fake.stereo: .init(muted: false, volume: 60),
+            Fake.headset: .init(muted: false, volume: 10),
+        ])
+        let coordinator = makeCoordinator(control)
+
+        coordinator.mute()
+        control.switchCarryingMute(to: Fake.headset)
+        XCTAssertTrue(control[Fake.headset].muted)
+
+        coordinator.restore()
+        XCTAssertFalse(control[Fake.headset].muted, "carried-over mute is ours to undo")
+
+        control.switchTo(Fake.stereo)
+        XCTAssertFalse(control[Fake.stereo].muted)
+        fireTimers()
+        XCTAssertEqual(coordinator.phase, .idle)
+    }
+
+    func testUserMuteDuringRestoreWaitIsNotUndoneWhenProfileReturns() {
+        let control = Fake(current: Fake.stereo, profiles: [
+            Fake.stereo: .init(muted: false, volume: 60),
+            Fake.headset: .init(muted: false, volume: 10),
+        ])
+        let coordinator = makeCoordinator(control)
+
+        coordinator.mute()
+        control.switchTo(Fake.headset)
+        coordinator.restore()
+        XCTAssertFalse(control[Fake.headset].muted)
+
+        // Headset lingers on HFP; the user mutes it on purpose.
+        control.userSetsMute(true)
+        XCTAssertEqual(coordinator.phase, .idle, "user took over; stop waiting")
+        XCTAssertFalse(control.observing)
+
+        control.switchTo(Fake.stereo)
+        XCTAssertTrue(control[Fake.stereo].muted, "must not undo the user's mute")
+    }
+
+    func testMuteEventFromOurOwnUnmuteIsIgnored() {
+        let control = Fake(current: Fake.stereo, profiles: [
+            Fake.stereo: .init(muted: false, volume: 60),
+            Fake.headset: .init(muted: false, volume: 10),
+        ])
+        let coordinator = makeCoordinator(control)
+
+        coordinator.mute()
+        control.switchTo(Fake.headset)
+        coordinator.restore()
+        control.handler?(.mute)  // CoreAudio echoes the bit we just cleared
+        XCTAssertEqual(coordinator.phase, .restoring)
+        XCTAssertTrue(control.observing)
+
+        control.switchTo(Fake.stereo)
+        XCTAssertFalse(control[Fake.stereo].muted)
+    }
+
+    func testMuteEventThatCoincidesWithProfileSwitchRestoresThatProfile() {
+        let control = Fake(current: Fake.stereo, profiles: [
+            Fake.stereo: .init(muted: false, volume: 60),
+            Fake.headset: .init(muted: false, volume: 10),
+        ])
+        let coordinator = makeCoordinator(control)
+
+        coordinator.mute()
+        control.switchTo(Fake.headset)
+        coordinator.restore()
+
+        // Profile flips back and the mute event arrives before the format event.
+        control.signature = Fake.stereo
+        control.handler?(.mute)
         XCTAssertFalse(control[Fake.stereo].muted)
     }
 
