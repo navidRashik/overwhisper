@@ -93,6 +93,12 @@ final class SystemAudioMuteCoordinator {
     private var lastActedSignature: SystemAudioOutputSignature?
     private var expectedMuted: Bool?
 
+    /// Executing an AppleScript spins the main run loop, so a CoreAudio
+    /// listener can fire in the middle of a mute or restore. Those re-entrant
+    /// events are deferred until the current step finishes.
+    private var busy = false
+    private var recheckPending = false
+
     init(
         control: SystemAudioControlling,
         scheduleAfter: @escaping (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, work in
@@ -106,6 +112,10 @@ final class SystemAudioMuteCoordinator {
     // MARK: Public API
 
     func mute() {
+        if busy { return }
+        busy = true
+        defer { finishStep() }
+
         if phase != .idle {
             let pending = snapshots.filter { !$0.restored && !$0.wasMuted }.count
             if pending > 0 {
@@ -132,7 +142,9 @@ final class SystemAudioMuteCoordinator {
     }
 
     func restore() {
-        guard phase == .muted else { return }
+        guard phase == .muted, !busy else { return }
+        busy = true
+        defer { finishStep() }
         phase = .restoring
         generation += 1
         let gen = generation
@@ -155,6 +167,13 @@ final class SystemAudioMuteCoordinator {
     /// Called from the CoreAudio observer, from delayed follow-up checks, and
     /// by the recorder right after the audio engine starts.
     func outputMayHaveChanged() {
+        if busy {
+            recheckPending = true
+            return
+        }
+        busy = true
+        defer { finishStep() }
+
         switch phase {
         case .idle:
             return
@@ -162,6 +181,14 @@ final class SystemAudioMuteCoordinator {
             reassertMute()
         case .restoring:
             restoreCurrentProfileIfNeeded()
+        }
+    }
+
+    private func finishStep() {
+        busy = false
+        if recheckPending {
+            recheckPending = false
+            outputMayHaveChanged()
         }
     }
 
@@ -180,6 +207,13 @@ final class SystemAudioMuteCoordinator {
     /// switch itself and is handled as an output change.
     private func muteBitChanged() {
         guard phase == .restoring else { return }
+        if busy {
+            recheckPending = true
+            return
+        }
+        busy = true
+        defer { finishStep() }
+
         let signature = control.currentOutputSignature()
         guard signature == lastActedSignature else {
             outputMayHaveChanged()
@@ -263,8 +297,11 @@ final class SystemAudioMuteCoordinator {
     private func restoreCurrentProfileIfNeeded() {
         let signature = control.currentOutputSignature()
 
-        if let index = snapshots.lastIndex(where: { !$0.restored && $0.matches(signature) }) {
-            restoreSnapshot(at: index, current: signature)
+        let pending = snapshots.indices.filter { !snapshots[$0].restored && snapshots[$0].matches(signature) }
+        if !pending.isEmpty {
+            for index in pending {
+                restoreSnapshot(at: index, current: signature)
+            }
         } else if let snapshot = snapshots.last(where: { $0.matches(signature) }),
                   !snapshot.wasMuted, !snapshot.usedVolumeFallback,
                   let muted = control.isOutputMuted(), muted {
