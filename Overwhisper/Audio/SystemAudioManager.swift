@@ -242,7 +242,7 @@ final class SystemAudioMuteCoordinator {
             let carriedOver = snapshots.contains { !$0.wasMuted }
             snapshots.append(Snapshot(signature: signature, wasMuted: !carriedOver, previousVolume: currentVolume, usedVolumeFallback: false, restored: false))
             if carriedOver {
-                AppLogger.system.info("\(Self.describe(signature)) already muted; assuming our mute carried over")
+                AppLogger.system.info("\(Self.describe(signature), privacy: .public) already muted; assuming our mute carried over")
                 lastActedSignature = signature
                 expectedMuted = true
             } else {
@@ -259,14 +259,14 @@ final class SystemAudioMuteCoordinator {
             snapshots.append(Snapshot(signature: signature, wasMuted: false, previousVolume: currentVolume, usedVolumeFallback: false, restored: false))
             lastActedSignature = signature
             expectedMuted = true
-            AppLogger.system.info("Muted using mute command (\(Self.describe(signature)))")
+            AppLogger.system.info("Muted using mute command (\(Self.describe(signature), privacy: .public))")
             return
         }
 
         // Fallback: set volume to 0
         if control.setOutputVolume(0) {
             snapshots.append(Snapshot(signature: signature, wasMuted: false, previousVolume: currentVolume, usedVolumeFallback: true, restored: false))
-            AppLogger.system.info("Muted by setting volume to 0 (was \(currentVolume), \(Self.describe(signature)))")
+            AppLogger.system.info("Muted by setting volume to 0 (was \(currentVolume), \(Self.describe(signature), privacy: .public))")
         }
     }
 
@@ -276,7 +276,7 @@ final class SystemAudioMuteCoordinator {
         guard let snapshot = snapshots.last(where: { $0.matches(signature) }) else {
             // Output moved to a profile we haven't touched (e.g. a Bluetooth
             // headset switched to its headset profile). Mute it too.
-            AppLogger.system.info("Output changed to \(Self.describe(signature)) during recording; muting it")
+            AppLogger.system.info("Output changed to \(Self.describe(signature), privacy: .public) during recording; muting it")
             applyMute()
             return
         }
@@ -288,7 +288,7 @@ final class SystemAudioMuteCoordinator {
             control.setOutputMuted(true)
             lastActedSignature = signature
             expectedMuted = true
-            AppLogger.system.info("Re-muted \(Self.describe(signature)) after output change")
+            AppLogger.system.info("Re-muted \(Self.describe(signature), privacy: .public) after output change")
         }
     }
 
@@ -310,7 +310,7 @@ final class SystemAudioMuteCoordinator {
             control.setOutputMuted(false)
             lastActedSignature = signature
             expectedMuted = false
-            AppLogger.system.info("Unmuted \(Self.describe(signature)) again after output change")
+            AppLogger.system.info("Unmuted \(Self.describe(signature), privacy: .public) again after output change")
         }
 
         if snapshots.allSatisfy({ $0.restored }) && graceElapsed {
@@ -332,7 +332,7 @@ final class SystemAudioMuteCoordinator {
 
         if snapshot.usedVolumeFallback {
             if snapshot.previousVolume > 0, control.setOutputVolume(snapshot.previousVolume) {
-                AppLogger.system.info("Restored volume to \(snapshot.previousVolume) (\(Self.describe(snapshot.signature)))")
+                AppLogger.system.info("Restored volume to \(snapshot.previousVolume) (\(Self.describe(snapshot.signature), privacy: .public))")
             }
             return
         }
@@ -340,7 +340,7 @@ final class SystemAudioMuteCoordinator {
         if control.setOutputMuted(false) {
             lastActedSignature = signature
             expectedMuted = false
-            AppLogger.system.info("Unmuted using mute command (\(Self.describe(snapshot.signature)))")
+            AppLogger.system.info("Unmuted using mute command (\(Self.describe(snapshot.signature), privacy: .public))")
         }
     }
 
