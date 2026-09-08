@@ -845,6 +845,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             appState.startRecordingTimer()
             startRecordingLimitTimer()
             overlayWindow.show(position: appState.overlayPosition)
+
+            // Opening the microphone can flip a Bluetooth headset to its
+            // headset profile, which carries its own mute state. Re-check now
+            // (the mute coordinator also watches CoreAudio for the switch).
+            SystemAudioManager.outputDeviceMayHaveChanged()
         } catch {
             audioRecorder.resetAudioEngine()
 
