@@ -6,6 +6,19 @@
     <description>Most recent updates to Overwhisper</description>
     <language>en</language>
     <item>
+      <title>Version 1.9.3</title>
+      <pubDate>Tue, 08 Sep 2026 18:02:19 +0000</pubDate>
+      <sparkle:version>48</sparkle:version>
+      <sparkle:shortVersionString>1.9.3</sparkle:shortVersionString>
+      <description><![CDATA[<h2>Version 1.9.3</h2><ul><li>Fixed &quot;Mute system audio while recording&quot; with AirPods and other Bluetooth headsets. Opening the microphone switches the headset to a different audio profile with its own mute state, so music could keep playing during the recording and the headphones could stay muted afterwards. The mute now follows the profile switch in both directions.</li></ul>]]></description>
+      <enclosure
+        url="https://github.com/OverseedAI/overwhisper/releases/download/v1.9.3/Overwhisper-1.9.3.dmg"
+        length="7436805"
+        type="application/octet-stream"
+        sparkle:edSignature="LeHQw59omqx6Jo/ASBe4ndYpXpXYXrrOX4B8tQrr+4A82evLf3DDXOASMVnxQyauCYPbJssjOo1POK/zODjHCw=="
+      />
+    </item>
+    <item>
       <title>Version 1.9.2</title>
       <pubDate>Mon, 03 Aug 2026 20:31:30 +0000</pubDate>
       <sparkle:version>46</sparkle:version>
