@@ -18,6 +18,7 @@
 		70FA1EA74756D7D320D285E1 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FCE79557B30B53B7AB17AE32 /* Sparkle */; };
 		7D180EF2BEA910E301CCFF11 /* OverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F33FBAA55580AA9161076B3F /* OverlayView.swift */; };
 		8A57D64071EE9382870A168A /* HotKey in Frameworks */ = {isa = PBXBuildFile; productRef = 9A4FF0B4B24B9C3208107118 /* HotKey */; };
+		8D87D7621BF3B6F19F1543BA /* SystemAudioManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F2158C9251C1F2168EEDCC6 /* SystemAudioManager.swift */; };
 		9AEBC4844C98AB6EB8D188C1 /* UsageAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9443C3E7E246048C964481B9 /* UsageAnalytics.swift */; };
 		9BB4A5EF51B9DF3D4F27565E /* DebugSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ADFC9097F990B8F1921F2B8 /* DebugSession.swift */; };
 		A29C2673D8311037884AC6DD /* OverwhisperApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2AB0D6F62E0EBA98666314F /* OverwhisperApp.swift */; };
@@ -46,6 +47,7 @@
 		605F07BD195AAE4FEA3C5F44 /* DebugAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugAudioPlayer.swift; sourceTree = "<group>"; };
 		756F6B9208C887A594813A6B /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
 		785617F77BB6DE5884349534 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7F2158C9251C1F2168EEDCC6 /* SystemAudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioManager.swift; sourceTree = "<group>"; };
 		82812CE441C897C9A14857B0 /* Overwhisper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Overwhisper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8AC1285E3693B5BA33093458 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		9443C3E7E246048C964481B9 /* UsageAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageAnalytics.swift; sourceTree = "<group>"; };
@@ -135,6 +137,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0EF1327337992F9B5CA01B /* AudioRecorder.swift */,
+				7F2158C9251C1F2168EEDCC6 /* SystemAudioManager.swift */,
 			);
 			path = Audio;
 			sourceTree = "<group>";
@@ -295,6 +298,7 @@
 				A29C2673D8311037884AC6DD /* OverwhisperApp.swift in Sources */,
 				6DD1BCF8D745B4C56672FEEF /* ParakeetEngine.swift in Sources */,
 				CD6A803C535173D80F3D6A95 /* SettingsView.swift in Sources */,
+				8D87D7621BF3B6F19F1543BA /* SystemAudioManager.swift in Sources */,
 				3C20ABADE932477FE5057996 /* TextInserter.swift in Sources */,
 				AA5001D76C50DA98C10D640F /* TranscriptionEngine.swift in Sources */,
 				9AEBC4844C98AB6EB8D188C1 /* UsageAnalytics.swift in Sources */,
