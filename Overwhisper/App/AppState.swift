@@ -376,7 +376,10 @@ class AppState: ObservableObject {
         let modelStr = UserDefaults.standard.string(forKey: "whisperModel") ?? WhisperModel.smallEn.rawValue
         // Any previously stored id stays valid: legacy short names ("small.en") and full variant
         // names ("distil-whisper_distil-large-v3") both round-trip through WhisperModel.
-        self.whisperModel = modelStr.isEmpty ? .smallEn : WhisperModel(rawValue: modelStr)
+        // A malformed id falls back to the default rather than persisting a model that can never
+        // initialize — otherwise the app stays wedged until the user finds Reset in Settings.
+        let storedModel = WhisperModel(rawValue: modelStr)
+        self.whisperModel = storedModel.isPlausibleVariant ? storedModel : .smallEn
 
         let parakeetModelStr = UserDefaults.standard.string(forKey: "parakeetModel") ?? ParakeetModelType.v3Multilingual.rawValue
         self.parakeetModel = ParakeetModelType(rawValue: parakeetModelStr) ?? .v3Multilingual
