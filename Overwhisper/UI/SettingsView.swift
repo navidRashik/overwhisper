@@ -181,6 +181,16 @@ struct GeneralSettingsView: View {
 struct TranscriptionSettingsView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var modelManager: ModelManager
+    @ObservedObject private var catalog = WhisperModelCatalog.shared
+
+    /// The selected model is always listed, even if this device's support tier omits it, so a
+    /// previously chosen model never silently vanishes from the UI.
+    private func withSelected(_ models: [WhisperModel]) -> [WhisperModel] {
+        let selected = appState.whisperModel
+        guard !models.contains(selected) else { return models }
+        guard selected.isEnglishOnly == (models.first?.isEnglishOnly ?? false) else { return models }
+        return whisperModelsSorted(models + [selected])
+    }
 
     private var isUsingOpenAI: Bool {
         appState.transcriptionEngine == .openAI
@@ -285,13 +295,14 @@ struct TranscriptionSettingsView: View {
             // 2. Model (right under engine)
             if isUsingWhisper {
                 Section {
-                    ForEach(WhisperModel.englishModels) { model in
+                    ForEach(withSelected(catalog.englishModels)) { model in
                         ModelRowView(
                             model: model,
-                            isDownloaded: appState.downloadedModels.contains(model.rawValue),
+                            isDownloaded: appState.downloadedModels.contains(model.variantName),
                             isSelected: appState.whisperModel == model,
-                            isDownloading: appState.currentlyDownloadingModel == model.rawValue,
+                            isDownloading: appState.currentlyDownloadingModel == model.variantName,
                             downloadProgress: appState.modelDownloadProgress,
+                            isRecommended: catalog.recommended == model,
                             modelManager: modelManager
                         )
                         .environmentObject(appState)
@@ -299,29 +310,41 @@ struct TranscriptionSettingsView: View {
                 } header: {
                     Text("English Models")
                 } footer: {
-                    Text("Optimized for English speech.")
+                    Text("Optimized for English speech. Distil models are faster with near-equal accuracy.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
 
                 Section {
-                    ForEach(WhisperModel.multilingualModels) { model in
+                    ForEach(withSelected(catalog.multilingualModels)) { model in
                         ModelRowView(
                             model: model,
-                            isDownloaded: appState.downloadedModels.contains(model.rawValue),
+                            isDownloaded: appState.downloadedModels.contains(model.variantName),
                             isSelected: appState.whisperModel == model,
-                            isDownloading: appState.currentlyDownloadingModel == model.rawValue,
+                            isDownloading: appState.currentlyDownloadingModel == model.variantName,
                             downloadProgress: appState.modelDownloadProgress,
+                            isRecommended: catalog.recommended == model,
                             modelManager: modelManager
                         )
                         .environmentObject(appState)
                     }
                 } header: {
-                    Text("Multilingual Models")
+                    HStack {
+                        Text("Multilingual Models")
+                        if catalog.isRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
                 } footer: {
-                    Text("Supports 99+ languages including Korean, Japanese, Chinese, and more.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Supports 99+ languages including Korean, Japanese, Chinese, and more.")
+                        Text(catalog.didLoadRemoteCatalog
+                             ? "Showing all \(catalog.models.count) variants Argmax publishes for this Mac."
+                             : "Showing the bundled model list — couldn't reach Argmax's catalog.")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 }
             }
 
@@ -431,6 +454,12 @@ struct TranscriptionSettingsView: View {
             }
         }
         .listStyle(.inset)
+        .task {
+            // Refresh once per Settings appearance so newly published variants show up without
+            // requiring an app update. Falls back to the bundled list when offline.
+            await catalog.refresh()
+            modelManager.scanForModels()
+        }
     }
 }
 
@@ -442,6 +471,7 @@ struct ModelRowView: View {
     let isSelected: Bool
     let isDownloading: Bool
     let downloadProgress: Double
+    var isRecommended: Bool = false
     let modelManager: ModelManager
 
     var body: some View {
@@ -461,6 +491,16 @@ struct ModelRowView: View {
                             Image(systemName: "checkmark.seal.fill")
                                 .foregroundColor(.green)
                                 .font(.caption)
+                        }
+
+                        if isRecommended {
+                            Text("Recommended")
+                                .font(.caption2)
+                                .foregroundColor(.accentColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.12))
+                                .cornerRadius(4)
                         }
                     }
 
@@ -512,7 +552,7 @@ struct ModelRowView: View {
             } else {
                 Button(action: {
                     Task {
-                        try? await modelManager.downloadModel(model.rawValue)
+                        try? await modelManager.downloadModel(model.variantName)
                     }
                 }) {
                     Label("Download", systemImage: "arrow.down.circle")
@@ -527,7 +567,7 @@ struct ModelRowView: View {
         .alert("Delete Model", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
-                try? modelManager.deleteModel(model.rawValue)
+                try? modelManager.deleteModel(model.variantName)
             }
         } message: {
             Text("Are you sure you want to delete \(model.displayName)? You'll need to download it again to use it.")
