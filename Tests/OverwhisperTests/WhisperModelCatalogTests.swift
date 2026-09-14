@@ -135,16 +135,37 @@ final class WhisperModelCatalogTests: XCTestCase {
         XCTAssertEqual(Set(variants).count, variants.count, "Offline list must not repeat a variant")
     }
 
-    /// Regression: the offline list was hard-coded to the Apple Silicon tier, which over-offered
-    /// on older hardware — the M1 tier excludes the `_turbo` and `large-v3-v20240930` builds, and
-    /// selecting one there fails at Core ML initialization. It must come from the device tier.
-    func testOfflineFallbackIsDeviceTieredNotHardCoded() {
-        let fallback = Set(WhisperModel.knownRemoteModels.map(\.variantName))
-        let deviceTier = Set(WhisperKit.recommendedModels().supported)
-        XCTAssertEqual(
-            fallback, deviceTier,
-            "Offline list must match WhisperKit's support tier for this device"
+    /// The catalog must offer the *full* published set, not just this device's tier.
+    ///
+    /// Deriving the list from `supported` alone hid variants from older hardware: an M1 saw 13
+    /// where an M4 saw 22. Argmax's split is guidance about what they validated per chip, not a
+    /// hard capability boundary, so the app shows the union and flags the difference instead.
+    func testCatalogOffersFullPublishedSetNotJustDeviceTier() {
+        let support = WhisperKit.recommendedModels()
+        let offered = Set(WhisperModel.knownRemoteModels.map(\.variantName))
+        let expected = Set(support.supported).union(support.disabled)
+
+        XCTAssertEqual(offered, expected, "Catalog must expose supported + disabled variants")
+        XCTAssertTrue(
+            Set(support.supported).isSubset(of: offered),
+            "Everything this device supports must remain offered"
         )
+    }
+
+    func testUntestedFlagMarksOutOfTierVariantsOnly() async {
+        let catalog = await WhisperModelCatalog()
+        let supported = WhisperKit.recommendedModels().supported.map(WhisperModel.init(rawValue:))
+
+        for model in supported {
+            let flagged = await catalog.isUntested(model)
+            XCTAssertFalse(flagged, "\(model.rawValue) is supported here and must not be flagged")
+        }
+
+        let disabled = WhisperKit.recommendedModels().disabled.map(WhisperModel.init(rawValue:))
+        for model in disabled {
+            let flagged = await catalog.isUntested(model)
+            XCTAssertTrue(flagged, "\(model.rawValue) is outside this tier and should be flagged")
+        }
     }
 
     // MARK: - Identity
