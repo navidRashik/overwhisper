@@ -144,7 +144,6 @@ actor WhisperKitEngine: TranscriptionEngine {
             temperatureFallbackCount: 5,
             sampleLength: 224,
             usePrefillPrompt: true,
-            usePrefillCache: true,
             skipSpecialTokens: true,
             withoutTimestamps: true,
             clipTimestamps: [],
