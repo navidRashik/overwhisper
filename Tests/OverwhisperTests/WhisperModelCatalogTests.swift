@@ -1,4 +1,5 @@
 import XCTest
+import WhisperKit
 @testable import Overwhisper
 
 final class WhisperModelCatalogTests: XCTestCase {
@@ -117,16 +118,87 @@ final class WhisperModelCatalogTests: XCTestCase {
 
     // MARK: - Catalog
 
-    func testFallbackCatalogCoversAllPublishedVariants() {
-        // The bundled list is what offline users see; it should span every family we know about.
-        let families = Set(WhisperModel.knownRemoteModels.map(\.family))
-        XCTAssertTrue(families.contains(.distilLargeV3))
-        XCTAssertTrue(families.contains(.largeV3Turbo))
-        XCTAssertTrue(families.contains(.tiny))
-        XCTAssertGreaterThan(
-            WhisperModel.knownRemoteModels.count, WhisperModel.legacyModels.count,
-            "The dynamic catalog must offer more than the 11 hard-coded legacy models"
+    /// The offline list is device-tiered, so its exact contents vary by hardware. What must hold
+    /// everywhere is that it is non-empty, well-formed, and free of duplicates.
+    func testOfflineFallbackIsWellFormedForThisDevice() {
+        let fallback = WhisperModel.knownRemoteModels
+        XCTAssertFalse(fallback.isEmpty, "Offline users must still get a usable model list")
+
+        for model in fallback {
+            XCTAssertTrue(
+                model.isPlausibleVariant,
+                "\(model.rawValue) is not a recognizable variant id"
+            )
+        }
+
+        let variants = fallback.map(\.variantName)
+        XCTAssertEqual(Set(variants).count, variants.count, "Offline list must not repeat a variant")
+    }
+
+    /// Regression: the offline list was hard-coded to the Apple Silicon tier, which over-offered
+    /// on older hardware — the M1 tier excludes the `_turbo` and `large-v3-v20240930` builds, and
+    /// selecting one there fails at Core ML initialization. It must come from the device tier.
+    func testOfflineFallbackIsDeviceTieredNotHardCoded() {
+        let fallback = Set(WhisperModel.knownRemoteModels.map(\.variantName))
+        let deviceTier = Set(WhisperKit.recommendedModels().supported)
+        XCTAssertEqual(
+            fallback, deviceTier,
+            "Offline list must match WhisperKit's support tier for this device"
         )
+    }
+
+    // MARK: - Identity
+
+    /// Regression: identity keyed on `rawValue` made a legacy preference ("small.en") compare
+    /// unequal to its fully-qualified twin ("openai_whisper-small.en"), so Settings rendered the
+    /// same model twice — once from the catalog, once appended as the "missing" selection.
+    func testLegacyAndQualifiedIdsAreTheSameModel() {
+        let legacy = WhisperModel(rawValue: "small.en")
+        let qualified = WhisperModel(rawValue: "openai_whisper-small.en")
+
+        XCTAssertEqual(legacy, qualified)
+        XCTAssertEqual(legacy.hashValue, qualified.hashValue)
+        XCTAssertEqual(legacy.id, qualified.id)
+        XCTAssertEqual(Set([legacy, qualified]).count, 1)
+    }
+
+    func testCatalogContainmentMatchesLegacySelection() {
+        let catalog = [
+            WhisperModel(rawValue: "openai_whisper-small.en"),
+            WhisperModel(rawValue: "openai_whisper-tiny.en")
+        ]
+        // The exact condition Settings uses to decide whether to append the selected model.
+        XCTAssertTrue(
+            catalog.contains(WhisperModel(rawValue: "small.en")),
+            "A legacy selection must be recognized as already present, or it renders twice"
+        )
+    }
+
+    func testDistinctVariantsRemainDistinct() {
+        let a = WhisperModel(rawValue: "openai_whisper-large-v3")
+        let b = WhisperModel(rawValue: "openai_whisper-large-v3_947MB")
+        let c = WhisperModel(rawValue: "openai_whisper-large-v3-v20240930")
+        XCTAssertEqual(Set([a, b, c]).count, 3)
+    }
+
+    // MARK: - Stored preference validation
+
+    /// Regression: any string was accepted as a model id, so a corrupted or withdrawn value
+    /// persisted forever — init fails, nothing resets it, and transcription throws
+    /// `notInitialized` on every attempt.
+    func testMalformedStoredIdsAreRejected() {
+        XCTAssertFalse(WhisperModel(rawValue: "").isPlausibleVariant)
+        XCTAssertFalse(WhisperModel(rawValue: "not-a-model").isPlausibleVariant)
+        XCTAssertFalse(WhisperModel(rawValue: "parakeet-tdt-0.6b-v3").isPlausibleVariant)
+    }
+
+    func testValidStoredIdsAreAccepted() {
+        XCTAssertTrue(WhisperModel(rawValue: "small.en").isPlausibleVariant, "legacy short name")
+        XCTAssertTrue(WhisperModel(rawValue: "large-v3_turbo").isPlausibleVariant, "legacy short name")
+        XCTAssertTrue(WhisperModel(rawValue: "openai_whisper-small.en").isPlausibleVariant)
+        XCTAssertTrue(WhisperModel(rawValue: "distil-whisper_distil-large-v3").isPlausibleVariant)
+        // A variant published after this build ships must still be accepted.
+        XCTAssertTrue(WhisperModel(rawValue: "openai_whisper-large-v9_future").isPlausibleVariant)
     }
 
     func testSortingGroupsFamiliesAndOrdersQuantizedAfterFull() {

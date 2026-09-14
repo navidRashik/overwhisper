@@ -17,7 +17,19 @@ struct WhisperModel: Identifiable, Hashable, Codable {
         self.rawValue = rawValue
     }
 
-    var id: String { rawValue }
+    /// Identity is the *variant*, not the stored string: `small.en` and
+    /// `openai_whisper-small.en` name the same download, so they must compare equal. Deriving
+    /// identity from `rawValue` instead would make a legacy preference look like a distinct
+    /// model and render it as a second row alongside its fully-qualified twin.
+    var id: String { variantName }
+
+    static func == (lhs: WhisperModel, rhs: WhisperModel) -> Bool {
+        lhs.variantName == rhs.variantName
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(variantName)
+    }
 
     // MARK: - Naming
 
@@ -163,21 +175,29 @@ struct WhisperModel: Identifiable, Hashable, Codable {
         .largeV2, .largeV3, .largeV3Turbo
     ]
 
-    /// Every variant currently published for Apple Silicon, used when the remote config is
-    /// unreachable. Kept in sync with `argmaxinc/whisperkit-coreml` config.json.
-    static let knownRemoteModels: [WhisperModel] = [
-        "openai_whisper-tiny", "openai_whisper-tiny.en",
-        "openai_whisper-base", "openai_whisper-base.en",
-        "openai_whisper-small", "openai_whisper-small.en",
-        "openai_whisper-large-v2", "openai_whisper-large-v2_949MB",
-        "openai_whisper-large-v2_turbo", "openai_whisper-large-v2_turbo_955MB",
-        "openai_whisper-large-v3", "openai_whisper-large-v3_947MB",
-        "openai_whisper-large-v3_turbo", "openai_whisper-large-v3_turbo_954MB",
-        "distil-whisper_distil-large-v3", "distil-whisper_distil-large-v3_594MB",
-        "distil-whisper_distil-large-v3_turbo", "distil-whisper_distil-large-v3_turbo_600MB",
-        "openai_whisper-large-v3-v20240930", "openai_whisper-large-v3-v20240930_turbo",
-        "openai_whisper-large-v3-v20240930_626MB", "openai_whisper-large-v3-v20240930_turbo_632MB"
-    ].map(WhisperModel.init(rawValue:))
+    /// The variants to offer when Argmax's remote config is unreachable.
+    ///
+    /// This delegates to WhisperKit's bundled `recommendedModels()`, which resolves the support
+    /// tier for *this* device without any network access. Hard-coding the Apple Silicon list
+    /// here instead would over-offer on older hardware: the M1 tier excludes the nine `_turbo`
+    /// and `large-v3-v20240930` variants that an M4 supports, and selecting one of those on an
+    /// M1 fails at Core ML initialization.
+    static var knownRemoteModels: [WhisperModel] {
+        WhisperKit.recommendedModels().supported.map(WhisperModel.init(rawValue:))
+    }
+
+    /// Whether this id is a plausible WhisperKit variant.
+    ///
+    /// A stored preference is no longer validated against a fixed enum, so a corrupted or
+    /// withdrawn id would previously persist forever: initialization fails, nothing resets it,
+    /// and every transcription then throws `notInitialized` with no way back except a manual
+    /// settings reset. Membership can't be checked at load time (the catalog is fetched later
+    /// and is device-specific), so this checks the shape instead — a legacy short name or a
+    /// published-variant prefix.
+    var isPlausibleVariant: Bool {
+        if Self.legacyModels.contains(where: { $0.rawValue == rawValue }) { return true }
+        return rawValue.hasPrefix("openai_whisper-") || rawValue.hasPrefix("distil-whisper_")
+    }
 
     /// Preserved for source compatibility with call sites that enumerated the old enum.
     static var allCases: [WhisperModel] { legacyModels }
@@ -227,7 +247,11 @@ final class WhisperModelCatalog: ObservableObject {
     static let shared = WhisperModelCatalog()
 
     init() {
-        self.models = whisperModelsSorted(WhisperModel.knownRemoteModels)
+        // Seed from WhisperKit's bundled, device-tiered support list so the picker is correct
+        // for this hardware before (or without) any network call.
+        let local = WhisperKit.recommendedModels()
+        self.models = whisperModelsSorted(local.supported.map(WhisperModel.init(rawValue:)))
+        self.recommended = WhisperModel(rawValue: local.default)
     }
 
     var englishModels: [WhisperModel] { models.filter { $0.isEnglishOnly } }
