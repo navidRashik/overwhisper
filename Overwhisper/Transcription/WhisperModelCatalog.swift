@@ -183,7 +183,12 @@ struct WhisperModel: Identifiable, Hashable, Codable {
     /// and `large-v3-v20240930` variants that an M4 supports, and selecting one of those on an
     /// M1 fails at Core ML initialization.
     static var knownRemoteModels: [WhisperModel] {
-        WhisperKit.recommendedModels().supported.map(WhisperModel.init(rawValue:))
+        let local = WhisperKit.recommendedModels()
+        var seen = Set<String>()
+        return (local.supported + local.disabled).compactMap { name in
+            guard seen.insert(name).inserted else { return nil }
+            return WhisperModel(rawValue: name)
+        }
     }
 
     /// Whether this id is a plausible WhisperKit variant.
@@ -236,8 +241,11 @@ func whisperModelsSorted(_ models: [WhisperModel]) -> [WhisperModel] {
 /// therefore both how we unlock the full catalog and how we stay honest about what will work.
 @MainActor
 final class WhisperModelCatalog: ObservableObject {
-    /// Variants supported on this device, ready for display.
+    /// Every variant published for this repo, including ones outside this device's tier.
     @Published private(set) var models: [WhisperModel]
+    /// Variants Argmax lists as supported on this device. Everything in `models` not in here is
+    /// still offered, but flagged — see `isUntested(_:)`.
+    @Published private(set) var supportedOnThisDevice: Set<WhisperModel>
     /// The variant Argmax recommends for this device, if known.
     @Published private(set) var recommended: WhisperModel?
     @Published private(set) var isRefreshing = false
@@ -247,11 +255,32 @@ final class WhisperModelCatalog: ObservableObject {
     static let shared = WhisperModelCatalog()
 
     init() {
-        // Seed from WhisperKit's bundled, device-tiered support list so the picker is correct
-        // for this hardware before (or without) any network call.
+        // Seed from WhisperKit's bundled config so the picker is populated before (or without)
+        // any network call.
         let local = WhisperKit.recommendedModels()
-        self.models = whisperModelsSorted(local.supported.map(WhisperModel.init(rawValue:)))
+        let supported = local.supported.map(WhisperModel.init(rawValue:))
+        self.supportedOnThisDevice = Set(supported)
+        self.models = whisperModelsSorted(Self.union(supported: local.supported, disabled: local.disabled))
         self.recommended = WhisperModel(rawValue: local.default)
+    }
+
+    /// Argmax's config splits variants into `supported` and `disabled` *per device tier*. The
+    /// union is the full published catalog; the split is advice about what Argmax has validated
+    /// on this hardware. We show the union so no model is hidden — an M1 sees the same list as
+    /// an M4 — and mark the difference in the UI instead of silently withholding it.
+    private static func union(supported: [String], disabled: [String]) -> [WhisperModel] {
+        var seen = Set<String>()
+        return (supported + disabled).compactMap { name in
+            guard seen.insert(name).inserted else { return nil }
+            return WhisperModel(rawValue: name)
+        }
+    }
+
+    /// True when Argmax doesn't list this variant for the current device. It is still selectable;
+    /// this only drives a UI hint, since the practical outcome is usually slower inference rather
+    /// than outright failure, and the user is entitled to decide.
+    func isUntested(_ model: WhisperModel) -> Bool {
+        !supportedOnThisDevice.isEmpty && !supportedOnThisDevice.contains(model)
     }
 
     var englishModels: [WhisperModel] { models.filter { $0.isEnglishOnly } }
@@ -271,13 +300,14 @@ final class WhisperModelCatalog: ObservableObject {
             return
         }
 
-        let fetched = supported.map(WhisperModel.init(rawValue:))
+        let fetched = Self.union(supported: supported, disabled: support.disabled)
+        supportedOnThisDevice = Set(supported.map(WhisperModel.init(rawValue:)))
         models = whisperModelsSorted(fetched)
         recommended = WhisperModel(rawValue: support.default)
         didLoadRemoteCatalog = true
 
         AppLogger.transcription.info(
-            "Loaded \(fetched.count) model variants for this device (recommended: \(support.default))"
+            "Loaded \(fetched.count) model variants (\(supported.count) listed for this device, recommended: \(support.default))"
         )
     }
 }
