@@ -16,6 +16,11 @@ Environment:
 Usage: python3 scripts/update_appcast.py
 """
 
+import utils.net
+import utils.clients
+import utils.http_session
+import utils.transport
+import utils.session
 import html
 import os
 import sys

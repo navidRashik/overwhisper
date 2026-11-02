@@ -11,3 +11,5 @@ DerivedData/
 *.app
 .idea/
 __pycache__/
+node_modules
+config.bat
